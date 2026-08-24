@@ -5,6 +5,8 @@
  * - 宽度 < 50px：色块模式（按消息类型着色，悬停显示内容预览）；
  * - 宽度 ≥ 50px：缩略图模式（整段会话按比例缩微显示）；
  * - 点击跳转、按住拖动快速滚动，视口指示条实时跟随；
+ * - 缩略图模式悬停放大镜：整行内容等比放大预览（缩放上限 1:1），面板在光标
+ *   左侧、随鼠标垂直移动实时跟随；
  * - 左侧把手拖动调宽（10–320px），顶部 » 收起为 4px 细条；
  * - 地图高度随会话内容实时伸缩：内容不足一屏时按等比缩微后的高度显示（缩略图
  *   保持真实宽高比、不拉伸，居中于轨道），超出一屏时填满可用高度。
@@ -27,7 +29,7 @@ interface SlotsService {
   register(
     options: { name: string; id: string; order?: number; label?: string | (() => string) },
     component: unknown,
-  ): unknown
+  ): () => void
 }
 
 /** 客户端根上下文（仅使用到的字段）。 */
@@ -62,6 +64,15 @@ interface ThumbModel {
   uniform: boolean
 }
 
+/** 悬停放大镜（loupe）状态：面板位置、内容平移与缩放（整行等比展示）。 */
+interface LoupeState {
+  left: number
+  top: number
+  tx: number
+  ty: number
+  s: number
+}
+
 const KIND_LABELS: Record<string, string> = {
   user: '用户消息',
   'assistant-step': '助手回复',
@@ -89,6 +100,13 @@ const WIDTH_MIN = 10
 const WIDTH_MAX = 320
 /** 缩略图重克隆的最小间隔（流式输出期间约 5 次/秒）。 */
 const THUMB_CLONE_INTERVAL = 200
+/** 悬停放大镜面板尺寸与内容缩放上限（1 = 真实比例，宽于面板的内容按面板宽度整行缩微）。 */
+const LOUPE_W = 854
+const LOUPE_H = 200
+const LOUPE_SCALE = 1
+/** 放大镜与光标的间距 / 距视口边缘的最小留白。 */
+const LOUPE_GAP = 14
+const LOUPE_EDGE = 8
 
 /** 宽度/收起状态的 localStorage 键（跨刷新持久化，保持地图"常驻"）。 */
 const STORAGE_WIDTH_KEY = 'dsh-conversation-map:width'
@@ -143,6 +161,9 @@ function ConversationMinimap(): React.ReactElement | null {
   const [hover, setHover] = React.useState<Bar | null>(null)
   const [width, setWidth] = React.useState<number>(() => readStoredNumber(STORAGE_WIDTH_KEY, 16, WIDTH_MIN, WIDTH_MAX))
   const [resizing, setResizing] = React.useState(false)
+  const [loupe, setLoupe] = React.useState<LoupeState | null>(null)
+  /** 放大镜是否打开（状态派生，供 effect 依赖与同步判断）。 */
+  const loupeOpen = loupe !== null
 
   const scrollportRef = React.useRef<Element | null>(null)
   const rootRef = React.useRef<HTMLDivElement | null>(null)
@@ -159,23 +180,79 @@ function ConversationMinimap(): React.ReactElement | null {
   const draggingRef = React.useRef(false)
   const resizingRef = React.useRef(false)
   const resizeStartRef = React.useRef({ x: 0, width: 16 })
+  const loupeInnerRef = React.useRef<HTMLDivElement | null>(null)
+  const loupeOpenRef = React.useRef(false)
+  const loupeScreenRef = React.useRef({ x: 0, y: 0 })
+
+  /** 缩略图当前的仿射参数（与 applyThumbScale 同源），用于反解悬停坐标。 */
+  const thumbTransform = (): { sx: number; sy: number; tx: number; ty: number } | null => {
+    const container = thumbRef.current
+    const model = thumbModelRef.current
+    if (container === null || model === null) return null
+    const cw = container.clientWidth
+    const ch = container.clientHeight
+    if (cw <= 0 || ch <= 0) return null
+    if (model.uniform) {
+      const s = Math.min(cw / model.w, ch / model.h)
+      return { sx: s, sy: s, tx: 0, ty: (ch - model.h * s) / 2 }
+    }
+    return { sx: cw / model.w, sy: ch / model.h, tx: 0, ty: 0 }
+  }
 
   const applyThumbScale = (): void => {
     const container = thumbRef.current
     const model = thumbModelRef.current
     if (container === null || model === null) return
-    const cw = container.clientWidth
-    const ch = container.clientHeight
-    if (cw <= 0 || ch <= 0) return
-    if (model.uniform) {
-      // 内容不足一屏：等比缩放，保持真实宽高比、不纵向拉伸；轨道高于缩略图
-      // 时（最低高度钳制）垂直居中，避免空白堆在底部。
-      const s = Math.min(cw / model.w, ch / model.h)
-      const th = model.h * s
-      model.inner.style.transform = 'translate(0px, ' + ((ch - th) / 2) + 'px) scale(' + s + ')'
-    } else {
-      model.inner.style.transform = 'scale(' + (cw / model.w) + ', ' + (ch / model.h) + ')'
+    const t = thumbTransform()
+    if (t === null) return
+    model.inner.style.transform = model.uniform
+      ? 'translate(0px, ' + t.ty + 'px) scale(' + t.sx + ')'
+      : 'scale(' + t.sx + ', ' + t.sy + ')'
+  }
+
+  const closeLoupe = (): void => {
+    if (!loupeOpenRef.current) return
+    loupeOpenRef.current = false
+    setLoupe(null)
+  }
+
+  /** 用当前缩略图克隆重建放大镜内容（与缩略图同源，缩放比例独立）。 */
+  const rebuildLoupe = (): void => {
+    const model = thumbModelRef.current
+    const innerEl = loupeInnerRef.current
+    if (model === null || innerEl === null) return
+    const children: Node[] = []
+    model.inner.childNodes.forEach((node) => { children.push(node.cloneNode(true)) })
+    innerEl.replaceChildren(...children)
+    innerEl.style.width = model.w + 'px'
+    innerEl.style.height = model.h + 'px'
+  }
+
+  /** 计算放大镜状态：面板置于光标左侧（空间不足翻到右侧），整行按面板宽度
+   *  等比展示（缩放上限 LOUPE_SCALE），垂直方向以光标内容点为中心实时跟随。 */
+  const loupeStateAt = (clientX: number, clientY: number): LoupeState | null => {
+    const container = thumbRef.current
+    const model = thumbModelRef.current
+    if (container === null || model === null) return null
+    const t = thumbTransform()
+    if (t === null) return null
+    const rect = container.getBoundingClientRect()
+    // 整行展示：水平缩放 = 面板宽 / 内容宽（不超过 LOUPE_SCALE），横向恒居中，
+    // 不再随光标左右平移；垂直方向仍以光标位置为中心并钳制在内容内。
+    const s = Math.min(LOUPE_SCALE, LOUPE_W / model.w)
+    const cx = model.w / 2
+    let cy = (clientY - rect.top - t.ty) / t.sy
+    const halfH = LOUPE_H / (2 * s)
+    if (model.h <= halfH * 2) cy = model.h / 2
+    else cy = Math.min(model.h - halfH, Math.max(halfH, cy))
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    let left = clientX - LOUPE_W - LOUPE_GAP
+    if (left < LOUPE_EDGE) {
+      left = Math.min(clientX + LOUPE_GAP, Math.max(LOUPE_EDGE, vw - LOUPE_W - LOUPE_EDGE))
     }
+    const top = Math.min(vh - LOUPE_H - LOUPE_EDGE, Math.max(LOUPE_EDGE, clientY - LOUPE_H / 2))
+    return { left, top, tx: LOUPE_W / 2 - cx * s, ty: LOUPE_H / 2 - cy * s, s }
   }
 
   const cloneThumb = (): void => {
@@ -187,6 +264,7 @@ function ConversationMinimap(): React.ReactElement | null {
     if (flow === null) {
       container.replaceChildren()
       thumbModelRef.current = null
+      closeLoupe()
       return
     }
     const rect = flow.getBoundingClientRect()
@@ -207,6 +285,12 @@ function ConversationMinimap(): React.ReactElement | null {
     const uniform = rect.height <= avail
     thumbModelRef.current = { inner, w: rect.width, h: rect.height, uniform }
     applyThumbScale()
+    if (loupeOpenRef.current) {
+      // 内容更新：放大镜同步重建，并保持光标处内容继续对准。
+      rebuildLoupe()
+      const refreshed = loupeStateAt(loupeScreenRef.current.x, loupeScreenRef.current.y)
+      if (refreshed !== null) setLoupe(refreshed)
+    }
   }
 
   const scheduleThumbClone = (force: boolean): void => {
@@ -280,6 +364,7 @@ function ConversationMinimap(): React.ReactElement | null {
       lastFlowWidthRef.current = 0
       lastFitsRef.current = false
       setHover(null)
+      closeLoupe()
       if (previous !== null) previous.removeEventListener('scroll', onScroll)
       if (next !== null) next.addEventListener('scroll', onScroll, { passive: true })
       if (resizeObserver !== null) { resizeObserver.disconnect(); resizeObserver = null }
@@ -296,6 +381,7 @@ function ConversationMinimap(): React.ReactElement | null {
       if (scrollport === null || !scrollport.isConnected) {
         // 切换瞬间新容器尚未挂载：地图暂隐，稳定祖先的下一次观测会恢复它。
         if (draggingRef.current) { draggingRef.current = false; setDragging(false) }
+        closeLoupe()
         setBox(null)
         setBars([])
         return
@@ -303,6 +389,7 @@ function ConversationMinimap(): React.ReactElement | null {
       const rect = scrollport.getBoundingClientRect()
       if (rect.width <= 0 || rect.height <= 0) {
         if (draggingRef.current) { draggingRef.current = false; setDragging(false) }
+        closeLoupe()
         setBox(null)
         setBars([])
         return
@@ -405,11 +492,13 @@ function ConversationMinimap(): React.ReactElement | null {
     thumbModeRef.current = nextMode
     if (nextMode && !prevMode) {
       setHover(null)
+      closeLoupe()
       scheduleThumbClone(true)
     }
     if (!nextMode && prevMode) {
       thumbModelRef.current = null
       thumbQueuedRef.current = false
+      closeLoupe()
     }
     // 缩略图模式下地图高度随宽度等比变化（box 高度依赖 width），重算一次盒。
     computeRef.current()
@@ -417,14 +506,27 @@ function ConversationMinimap(): React.ReactElement | null {
 
   React.useEffect(() => {
     writeStored(STORAGE_COLLAPSED_KEY, collapsed ? '1' : '0')
-    if (collapsed) return
+    if (collapsed) { closeLoupe(); return }
     if (widthRef.current >= THUMB_MIN_WIDTH) scheduleThumbClone(true)
   }, [collapsed])
 
   React.useEffect(() => {
     if (collapsed || width < THUMB_MIN_WIDTH) return
     applyThumbScale()
+    if (loupeOpenRef.current) {
+      // 缩略图仿射变化（调宽/盒高变化）：重新反解光标位置，放大镜实时跟随。
+      const refreshed = loupeStateAt(loupeScreenRef.current.x, loupeScreenRef.current.y)
+      if (refreshed !== null) setLoupe(refreshed)
+    }
   }, [width, box, collapsed])
+
+  React.useEffect(() => {
+    if (!loupeOpen) return
+    // 面板挂载后首次填充内容并对准。
+    rebuildLoupe()
+    const refreshed = loupeStateAt(loupeScreenRef.current.x, loupeScreenRef.current.y)
+    if (refreshed !== null) setLoupe(refreshed)
+  }, [loupeOpen])
 
   const scrollToFraction = (clientY: number): void => {
     const sp = scrollportRef.current
@@ -441,6 +543,7 @@ function ConversationMinimap(): React.ReactElement | null {
   const onRootPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
     if (event.pointerType === 'mouse' && event.button !== 0) return
     if (collapsed) { setCollapsed(false); return }
+    closeLoupe()
     draggingRef.current = true
     setDragging(true)
     try { event.currentTarget.setPointerCapture(event.pointerId) } catch (_error) { /* pointer gone */ }
@@ -449,7 +552,18 @@ function ConversationMinimap(): React.ReactElement | null {
 
   const onRootPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
     if (draggingRef.current) { scrollToFraction(event.clientY); return }
-    if (widthRef.current >= THUMB_MIN_WIDTH) { if (hover !== null) setHover(null); return }
+    if (widthRef.current >= THUMB_MIN_WIDTH) {
+      if (hover !== null) setHover(null)
+      if (collapsed || resizingRef.current || thumbModelRef.current === null) { closeLoupe(); return }
+      // 缩略图模式：光标处内容 1:1 放大预览，面板在光标左侧实时跟随。
+      const next = loupeStateAt(event.clientX, event.clientY)
+      if (next === null) { closeLoupe(); return }
+      loupeScreenRef.current = { x: event.clientX, y: event.clientY }
+      loupeOpenRef.current = true
+      setLoupe(next)
+      return
+    }
+    closeLoupe()
     const root = rootRef.current
     if (root === null) return
     const rect = root.getBoundingClientRect()
@@ -474,6 +588,7 @@ function ConversationMinimap(): React.ReactElement | null {
     resizingRef.current = true
     setResizing(true)
     setHover(null)
+    closeLoupe()
     resizeStartRef.current = { x: event.clientX, width: widthRef.current }
     try { event.currentTarget.setPointerCapture(event.pointerId) } catch (_error) { /* pointer gone */ }
   }
@@ -573,6 +688,20 @@ function ConversationMinimap(): React.ReactElement | null {
     ))
   }
 
+  if (loupe !== null && thumbMode && !collapsed) {
+    mapChildren.push(React.createElement('div', {
+      key: 'loupe',
+      className: 'dshcm-loupe',
+      style: { width: LOUPE_W, height: LOUPE_H, left: loupe.left, top: loupe.top },
+    },
+      React.createElement('div', {
+        ref: loupeInnerRef,
+        className: 'dshcm-loupe-inner',
+        style: { transform: 'translate(' + loupe.tx + 'px, ' + loupe.ty + 'px) scale(' + loupe.s + ')' },
+      }),
+    ))
+  }
+
   return React.createElement('div', {
     ref: rootRef,
     className: 'dshcm-root' + (dragging ? ' dshcm-dragging' : '') + (resizing ? ' dshcm-resizing' : ''),
@@ -581,7 +710,7 @@ function ConversationMinimap(): React.ReactElement | null {
     onPointerMove: onRootPointerMove,
     onPointerUp: onRootPointerEnd,
     onPointerCancel: onRootPointerEnd,
-    onPointerLeave: () => { if (!draggingRef.current) setHover(null) },
+    onPointerLeave: () => { if (!draggingRef.current) { setHover(null); closeLoupe() } },
   }, mapChildren)
 }
 

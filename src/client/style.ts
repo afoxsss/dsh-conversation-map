@@ -19,6 +19,9 @@ export const MINIMAP_CSS = `
 .dshcm-thumb{position:absolute;top:0;right:0;bottom:0;left:0;overflow:hidden;border-radius:8px;background:var(--dsw-alias-bg-base,#101319);border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1,#7f8896) 60%,transparent);}
 .dshcm-thumb,.dshcm-thumb *{pointer-events:none !important;user-select:none !important;}
 .dshcm-thumb-inner{transform-origin:top left;overflow:hidden;}
+.dshcm-loupe{position:fixed;z-index:1201;overflow:hidden;border-radius:10px;border:2px solid rgba(140,150,168,.55);border:2px solid color-mix(in srgb,var(--dsw-alias-border-l1,#7f8896) 85%,transparent);background:var(--dsw-alias-bg-base,#101319);box-shadow:0 0 24px 2px rgba(76,141,255,.22),0 16px 40px rgba(0,0,0,.45);box-shadow:0 0 24px 2px color-mix(in srgb,var(--dsw-alias-brand-primary,#4c8dff) 26%,transparent),0 16px 40px rgba(0,0,0,.45);}
+.dshcm-loupe,.dshcm-loupe *{pointer-events:none !important;user-select:none !important;}
+.dshcm-loupe-inner{position:absolute;top:0;left:0;transform-origin:top left;overflow:hidden;}
 .dshcm-grip{position:absolute;top:0;bottom:0;left:-5px;width:10px;cursor:ew-resize;opacity:.4;transition:opacity 120ms ease;touch-action:none;}
 .dshcm-grip::after{content:'';position:absolute;left:4px;top:10px;bottom:10px;width:2px;border-radius:1px;background:var(--dsw-alias-label-secondary,#8a92a0);opacity:.65;}
 .dshcm-root:hover .dshcm-grip,.dshcm-root.dshcm-resizing .dshcm-grip{opacity:1;}
