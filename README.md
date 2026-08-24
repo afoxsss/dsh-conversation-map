@@ -25,18 +25,8 @@
 
 ## 安装
 
-### 从 npm（推荐）
-
 ```sh
 dsh plugin --profile web add dsh-conversation-map
-```
-
-### 本地 checkout / tarball
-
-```sh
-dsh plugin --profile web add ./dsh-conversation-map
-# 或
-dsh plugin --profile web add ./dsh-conversation-map-0.1.2.tgz
 ```
 
 验证层已挂载，然后启动：
