@@ -9,6 +9,7 @@
 - **快速滚动**：点击任意位置跳转，按住拖动连续滚动；半透明视口指示条实时显示当前可见区域。
 - **收起/展开**：悬停地图顶部点击 `»` 收起为 4px 细条，点击细条展开。
 - **实时同步**：消息流式输出、工具调用、切换会话时自动刷新；开合侧栏/详情面板、窗口缩放自动跟随。
+- **高度自适应**：地图高度随会话内容实时伸缩——内容不足一屏时按内容高度显示（缩略图不纵向拉伸），超出一屏时填满可用高度。
 
 ## 安装
 
@@ -34,7 +35,7 @@ dsh plugin --profile web add dsh-conversation-map
 ```sh
 dsh plugin --profile web add ./dsh-conversation-map
 # 或
-dsh plugin --profile web add ./dsh-conversation-map-0.1.0.tgz
+dsh plugin --profile web add ./dsh-conversation-map-0.1.2.tgz
 ```
 
 验证层已挂载，然后启动：

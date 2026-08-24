@@ -5,7 +5,9 @@
  * - 宽度 < 50px：色块模式（按消息类型着色，悬停显示内容预览）；
  * - 宽度 ≥ 50px：缩略图模式（整段会话按比例缩微显示）；
  * - 点击跳转、按住拖动快速滚动，视口指示条实时跟随；
- * - 左侧把手拖动调宽（10–320px），顶部 » 收起为 4px 细条。
+ * - 左侧把手拖动调宽（10–320px），顶部 » 收起为 4px 细条；
+ * - 地图高度随会话内容实时伸缩：内容不足一屏时按内容高度显示（缩略图不纵向
+ *   拉伸），超出一屏时填满可用高度。
  *
  * 依赖的 DOM 契约（dsh web 会话列）：
  * - [data-conversation-scroll]  会话滚动容器。注意：每次切换会话时，框架会把
@@ -285,10 +287,18 @@ function ConversationMinimap(): React.ReactElement | null {
       const composerHeight = composer === null ? 0 : composer.getBoundingClientRect().height
       const sbw = scrollbarWidthOf(scrollport)
       const vw = window.innerWidth
+      // 地图高度随会话内容实时伸缩：内容不足一屏时按内容高度显示（缩略图不纵向
+      // 拉伸），超出一屏时填满可用高度。内容基准与缩略图克隆同源（data-chat-flow）。
+      const flow = scrollport.querySelector('[data-chat-flow]')
+      const flowRect = flow === null ? null : flow.getBoundingClientRect()
+      const flowTopAbs = flowRect === null ? 0 : flowRect.top - rect.top + scrollport.scrollTop
+      const contentH = flowRect === null
+        ? Math.max(1, total - composerHeight)
+        : Math.max(1, flowRect.height)
       setBox({
         right: Math.max(0, vw - rect.right + sbw + 2),
         top: rect.top + 2,
-        height: Math.max(80, rect.height - composerHeight - 6),
+        height: Math.max(80, Math.min(rect.height - composerHeight - 6, contentH)),
       })
       const rows = scrollport.querySelectorAll('[data-chat-anchor-key]')
       const list: Bar[] = []
@@ -299,25 +309,22 @@ function ConversationMinimap(): React.ReactElement | null {
         list.push({
           key: row.getAttribute('data-chat-anchor-key') || '',
           kind: row.getAttribute('data-chat-flow-kind') || 'unknown',
-          top: total > 0 ? contentTop / total : 0,
-          height: total > 0 ? r.height / total : 0,
+          top: Math.max(0, (contentTop - flowTopAbs) / contentH),
+          height: r.height / contentH,
           text: String(row.textContent || '').replace(/\s+/g, ' ').trim().slice(0, MAX_SNIPPET),
         })
       }
       setBars(list)
-      if (total > 0) {
+      {
         const vh = scrollport.clientHeight
-        const vt = scrollport.scrollTop
+        const vt = scrollport.scrollTop - flowTopAbs
         setViewport({
-          top: Math.min(1, vt / total),
-          height: Math.min(1, Math.max(0.05, vh / total)),
+          top: Math.min(1, Math.max(0, vt / contentH)),
+          height: Math.min(1, Math.max(0.05, vh / contentH)),
         })
-      } else {
-        setViewport({ top: 0, height: 1 })
       }
       if (thumbModeRef.current) {
-        const flowNow = scrollport.querySelector('[data-chat-flow]')
-        const flowWidth = flowNow === null ? 0 : flowNow.getBoundingClientRect().width
+        const flowWidth = flowRect === null ? 0 : flowRect.width
         if (flowWidth !== lastFlowWidthRef.current) {
           lastFlowWidthRef.current = flowWidth
           scheduleThumbClone(true)
