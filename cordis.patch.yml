@@ -1,0 +1,7 @@
+# dsh-conversation-minimap 组合包层。
+# 向组合插入一行：按包名引用自身，Node 模块解析找到已安装的包。
+# 浏览器半身（exports["./client"] → lib/client.js）由 web 插件表扫描
+# package.json 的 dsh.client 声明后自动编入 window.__DSH_BOOT__。
+- insert:
+    - id: conversation-minimap
+      name: dsh-conversation-minimap

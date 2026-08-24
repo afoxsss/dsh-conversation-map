@@ -1,0 +1,61 @@
+{
+  "name": "dsh-conversation-minimap",
+  "version": "0.1.0",
+  "description": "会话代码地图：对话区右侧可拖动的会话缩略地图，色块/缩略图双模式，悬停预览、点击跳转、拖动快速滚动",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "lib/client.js",
+    "lib/client.js.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-name/dsh-conversation-minimap.git"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "minimap",
+    "conversation",
+    "code-map"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepare": "tsdown"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "tsdown": "^0.22.2",
+    "react": "^18.2.0",
+    "@types/react": "~18.3.1"
+  }
+}
