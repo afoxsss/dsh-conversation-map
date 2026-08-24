@@ -13,7 +13,13 @@
 
 ## 安装
 
-### 从 GitHub（推荐，社区发现方式）
+### 从 npm（推荐）
+
+```sh
+dsh plugin --profile web add dsh-conversation-map
+```
+
+### 从 GitHub（固定到某个 commit）
 
 ```sh
 # 固定到某个 commit，避免后续推送悄悄改变安装时执行的代码
@@ -23,12 +29,6 @@ dsh plugin --profile web add github:afoxsss/dsh-conversation-map#<commit-sha>
 > Git 安装会执行本包的 `prepare` 构建脚本。pnpm ≥ 10 首次会拦截构建并要求放行：按 `dsh` 提示把打印出的包名加入 profile 目录 `pnpm-workspace.yaml` 的 `allowBuilds`，然后重跑上面的命令。
 >
 > 放行构建 = 允许该包在你机器上安装时执行代码。请先审阅源码，并固定 commit。
-
-### 从 npm
-
-```sh
-dsh plugin --profile web add dsh-conversation-map
-```
 
 ### 本地 checkout / tarball
 
