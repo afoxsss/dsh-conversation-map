@@ -8,9 +8,13 @@
  * - 左侧把手拖动调宽（10–320px），顶部 » 收起为 4px 细条。
  *
  * 依赖的 DOM 契约（dsh web 会话列）：
- * - [data-conversation-scroll]  会话滚动容器（常驻）
+ * - [data-conversation-scroll]  会话滚动容器。注意：每次切换会话时，框架会把
+ *   session-maybe 的会话列整体重建，该容器是全新的 DOM 节点——插件不长期持有
+ *   旧节点，而是在每次计算时重新解析并重绑观察器（见挂载 effect）。
  * - [data-chat-anchor-key]      每条会话节点行（data-chat-flow-kind 为类型）
  * - [data-composer-seat]        底部输入区（地图避开它）
+ * - [data-slot="conversation"]  会话列的稳定槽位锚点（MutationObserver 挂载点，
+ *   锚点缺失时退回 document.body）
  */
 import * as React from 'react'
 import { MINIMAP_CSS } from './style'
@@ -76,6 +80,39 @@ const WIDTH_MAX = 320
 /** 缩略图重克隆的最小间隔（流式输出期间约 5 次/秒）。 */
 const THUMB_CLONE_INTERVAL = 200
 
+/** 宽度/收起状态的 localStorage 键（跨刷新持久化，保持地图"常驻"）。 */
+const STORAGE_WIDTH_KEY = 'dsh-conversation-map:width'
+const STORAGE_COLLAPSED_KEY = 'dsh-conversation-map:collapsed'
+
+function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw === null) return fallback
+    const value = parseFloat(raw)
+    if (!Number.isFinite(value)) return fallback
+    return Math.min(max, Math.max(min, value))
+  } catch (_error) {
+    // 存储不可用（隐私模式等）：退回默认值。
+    return fallback
+  }
+}
+
+function readStoredFlag(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) === '1'
+  } catch (_error) {
+    return false
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch (_error) {
+    // 存储不可用：忽略，仅影响跨刷新持久化。
+  }
+}
+
 function scrollbarWidthOf(scrollport: Element): number {
   try {
     const raw = window.getComputedStyle(scrollport).getPropertyValue('--dsh-scrollbar-width')
@@ -91,10 +128,10 @@ function ConversationMinimap(): React.ReactElement | null {
   const [bars, setBars] = React.useState<Bar[]>([])
   const [viewport, setViewport] = React.useState<{ top: number; height: number }>({ top: 0, height: 1 })
   const [box, setBox] = React.useState<Box | null>(null)
-  const [collapsed, setCollapsed] = React.useState(false)
+  const [collapsed, setCollapsed] = React.useState<boolean>(() => readStoredFlag(STORAGE_COLLAPSED_KEY))
   const [dragging, setDragging] = React.useState(false)
   const [hover, setHover] = React.useState<Bar | null>(null)
-  const [width, setWidth] = React.useState(16)
+  const [width, setWidth] = React.useState<number>(() => readStoredNumber(STORAGE_WIDTH_KEY, 16, WIDTH_MIN, WIDTH_MAX))
   const [resizing, setResizing] = React.useState(false)
 
   const scrollportRef = React.useRef<Element | null>(null)
@@ -105,7 +142,7 @@ function ConversationMinimap(): React.ReactElement | null {
   const thumbQueuedRef = React.useRef(false)
   const lastCloneAtRef = React.useRef(0)
   const lastFlowWidthRef = React.useRef(0)
-  const widthRef = React.useRef(16)
+  const widthRef = React.useRef(width)
   const thumbModeRef = React.useRef(false)
   const draggingRef = React.useRef(false)
   const resizingRef = React.useRef(false)
@@ -174,22 +211,75 @@ function ConversationMinimap(): React.ReactElement | null {
 
   React.useEffect(() => {
     if (typeof document === 'undefined' || typeof window === 'undefined') return undefined
-    let scrollport = document.querySelector('[data-conversation-scroll]')
-    if (scrollport === null) {
+    let pending = false
+    let rafId = 0
+    let resizeObserver: ResizeObserver | null = null
+
+    // 切换会话时框架会整体重建会话列（session-maybe 槽位按会话重挂载），
+    // 滚动容器随之换成新 DOM 节点。因此 MutationObserver 观察稳定祖先——
+    // 优先会话列的槽位锚点（display:contents，但仍在树中可被观察），
+    // 锚点缺失（旧版外壳）时退回 document.body。
+    const watchRoot: Node = document.querySelector('[data-slot="conversation"]') ?? document.body
+
+    const schedule = (): void => {
+      if (pending) return
+      pending = true
+      if (typeof window.requestAnimationFrame === 'function') {
+        rafId = window.requestAnimationFrame(() => { compute() })
+      } else {
+        rafId = 0
+        compute()
+      }
+    }
+
+    const onScroll = (): void => { schedule() }
+
+    /** 每次调用重新解析当前会话的滚动容器（不缓存，节点可能在会话切换时被替换）。 */
+    const resolveScrollport = (): Element | null => {
+      const direct = document.querySelector('[data-conversation-scroll]')
+      if (direct !== null && direct.isConnected) return direct
       const flow = document.querySelector('[data-chat-flow]')
       let node = flow === null ? null : flow.parentElement
       while (node !== null && !(node.scrollHeight > node.clientHeight + 1)) node = node.parentElement
-      scrollport = node
+      return node !== null && node.isConnected ? node : null
     }
-    if (scrollport === null) return undefined
-    scrollportRef.current = scrollport
 
-    let pending = false
-    let rafId = 0
+    /** 滚动容器换节点时重绑依赖它的观察器与监听，并失效缩略图缓存。 */
+    const rebindScrollport = (next: Element | null): void => {
+      const current = scrollportRef.current
+      if (next === current) return
+      const previous = current
+      scrollportRef.current = next
+      thumbModelRef.current = null
+      lastFlowWidthRef.current = 0
+      setHover(null)
+      if (previous !== null) previous.removeEventListener('scroll', onScroll)
+      if (next !== null) next.addEventListener('scroll', onScroll, { passive: true })
+      if (resizeObserver !== null) { resizeObserver.disconnect(); resizeObserver = null }
+      if (next !== null && typeof ResizeObserver === 'function') {
+        resizeObserver = new ResizeObserver(schedule)
+        resizeObserver.observe(next)
+      }
+    }
 
     const compute = (): void => {
       pending = false
+      rebindScrollport(resolveScrollport())
+      const scrollport = scrollportRef.current
+      if (scrollport === null || !scrollport.isConnected) {
+        // 切换瞬间新容器尚未挂载：地图暂隐，稳定祖先的下一次观测会恢复它。
+        if (draggingRef.current) { draggingRef.current = false; setDragging(false) }
+        setBox(null)
+        setBars([])
+        return
+      }
       const rect = scrollport.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) {
+        if (draggingRef.current) { draggingRef.current = false; setDragging(false) }
+        setBox(null)
+        setBars([])
+        return
+      }
       const total = scrollport.scrollHeight
       const composer = scrollport.querySelector('[data-composer-seat]')
       const composerHeight = composer === null ? 0 : composer.getBoundingClientRect().height
@@ -237,23 +327,8 @@ function ConversationMinimap(): React.ReactElement | null {
       }
     }
 
-    const schedule = (): void => {
-      if (pending) return
-      pending = true
-      if (typeof window.requestAnimationFrame === 'function') {
-        rafId = window.requestAnimationFrame(() => { compute() })
-      } else {
-        rafId = 0
-        compute()
-      }
-    }
-
     const mutation = typeof MutationObserver === 'function' ? new MutationObserver(schedule) : null
-    const resize = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
-    if (mutation !== null) mutation.observe(scrollport, { childList: true, subtree: true, characterData: true })
-    if (resize !== null) resize.observe(scrollport)
-    const onScroll = (): void => { schedule() }
-    scrollport.addEventListener('scroll', onScroll, { passive: true })
+    if (mutation !== null) mutation.observe(watchRoot, { childList: true, subtree: true, characterData: true })
     window.addEventListener('resize', schedule)
 
     compute()
@@ -266,15 +341,18 @@ function ConversationMinimap(): React.ReactElement | null {
       }
       thumbQueuedRef.current = false
       if (mutation !== null) mutation.disconnect()
-      if (resize !== null) resize.disconnect()
-      scrollport.removeEventListener('scroll', onScroll)
+      if (resizeObserver !== null) resizeObserver.disconnect()
+      const current = scrollportRef.current
+      if (current !== null) current.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', schedule)
       scrollportRef.current = null
+      thumbModelRef.current = null
     }
   }, [])
 
   React.useEffect(() => {
     widthRef.current = width
+    writeStored(STORAGE_WIDTH_KEY, String(Math.round(width)))
     const nextMode = width >= THUMB_MIN_WIDTH
     const prevMode = thumbModeRef.current
     thumbModeRef.current = nextMode
@@ -289,6 +367,7 @@ function ConversationMinimap(): React.ReactElement | null {
   }, [width])
 
   React.useEffect(() => {
+    writeStored(STORAGE_COLLAPSED_KEY, collapsed ? '1' : '0')
     if (collapsed) return
     if (widthRef.current >= THUMB_MIN_WIDTH) scheduleThumbClone(true)
   }, [collapsed])
@@ -364,7 +443,7 @@ function ConversationMinimap(): React.ReactElement | null {
   }
 
   const thumbMode = width >= THUMB_MIN_WIDTH
-  if (box === null || box.height <= 0 || bars.length < 2) return null
+  if (box === null || box.height <= 0) return null
 
   const mapChildren: React.ReactNode[] = []
   if (collapsed) {
@@ -384,7 +463,7 @@ function ConversationMinimap(): React.ReactElement | null {
     mapChildren.push(React.createElement('div', { key: 'track', className: 'dshcm-track' }, barNodes))
   }
 
-  if (!collapsed) {
+  if (!collapsed && bars.length > 0) {
     mapChildren.push(React.createElement('div', {
       key: 'viewport',
       className: 'dshcm-viewport',

@@ -49,10 +49,12 @@ dsh --profile web
 ## 兼容性说明
 
 - DeepSeek Harness 处于 **developer preview**，接口会破坏性变更；本插件当前基于 `dsh` 0.1.x 的 Web 会话 DOM 契约实现：
-  - `[data-conversation-scroll]` 会话滚动容器
+  - `[data-conversation-scroll]` 会话滚动容器（注意：切换会话时框架会重建会话列，该容器每次都是新节点，插件通过稳定祖先观察 + 每次计算重解析自动跟随）
   - `[data-chat-anchor-key]` / `[data-chat-flow-kind]` 会话节点行
   - `[data-composer-seat]` 底部输入区
-- 插件为**纯客户端**：Host 半身是空实现，浏览器半身通过 `shell.overlay` 槽位挂载，仅使用平台模块 `react` 与 `slots` 服务，无网络请求、无持久化、无遥测。
+- 地图常驻：切换会话无需刷新，色块/缩略图内容自动同步当前会话；新会话加载期间显示空轨道。
+- 宽度与收起状态持久化于浏览器 `localStorage`（键 `dsh-conversation-map:width` / `dsh-conversation-map:collapsed`），切换会话与刷新页面均保持。
+- 插件为**纯客户端**：Host 半身是空实现，浏览器半身通过 `shell.overlay` 槽位挂载，仅使用平台模块 `react` 与 `slots` 服务，无网络请求、无遥测（除上述 localStorage 本地状态外无其他持久化）。
 
 ## 开发
 
