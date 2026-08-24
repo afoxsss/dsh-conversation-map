@@ -6,8 +6,8 @@
  * - 宽度 ≥ 50px：缩略图模式（整段会话按比例缩微显示）；
  * - 点击跳转、按住拖动快速滚动，视口指示条实时跟随；
  * - 左侧把手拖动调宽（10–320px），顶部 » 收起为 4px 细条；
- * - 地图高度随会话内容实时伸缩：内容不足一屏时按内容高度显示（缩略图不纵向
- *   拉伸），超出一屏时填满可用高度。
+ * - 地图高度随会话内容实时伸缩：内容不足一屏时按等比缩微后的高度显示（缩略图
+ *   保持真实宽高比、不拉伸，居中于轨道），超出一屏时填满可用高度。
  *
  * 依赖的 DOM 契约（dsh web 会话列）：
  * - [data-conversation-scroll]  会话滚动容器。注意：每次切换会话时，框架会把
@@ -48,12 +48,18 @@ interface Box {
   right: number
   top: number
   height: number
+  /** 内容是否不足一屏（缩略图等比缩放并居中显示）。 */
+  fits: boolean
+  /** 缩略图等比缩放后的内容高度（fits 时视口指示条按它对齐）。 */
+  thumbH: number
 }
 
 interface ThumbModel {
   inner: HTMLDivElement
   w: number
   h: number
+  /** 内容不足一屏：等比缩放保持宽高比；超出一屏：拉伸填满轨道。 */
+  uniform: boolean
 }
 
 const KIND_LABELS: Record<string, string> = {
@@ -77,6 +83,8 @@ const KIND_LABELS: Record<string, string> = {
 const MAX_SNIPPET = 220
 /** 宽度达到该值时从色块模式切换为缩略图模式。 */
 const THUMB_MIN_WIDTH = 50
+/** 缩略图模式下内容不足一屏时，地图轨道的最低高度（容纳把手与收起按钮）。 */
+const THUMB_BOX_MIN = 48
 const WIDTH_MIN = 10
 const WIDTH_MAX = 320
 /** 缩略图重克隆的最小间隔（流式输出期间约 5 次/秒）。 */
@@ -144,6 +152,8 @@ function ConversationMinimap(): React.ReactElement | null {
   const thumbQueuedRef = React.useRef(false)
   const lastCloneAtRef = React.useRef(0)
   const lastFlowWidthRef = React.useRef(0)
+  const lastFitsRef = React.useRef(false)
+  const computeRef = React.useRef<() => void>(() => {})
   const widthRef = React.useRef(width)
   const thumbModeRef = React.useRef(false)
   const draggingRef = React.useRef(false)
@@ -157,7 +167,15 @@ function ConversationMinimap(): React.ReactElement | null {
     const cw = container.clientWidth
     const ch = container.clientHeight
     if (cw <= 0 || ch <= 0) return
-    model.inner.style.transform = 'scale(' + (cw / model.w) + ', ' + (ch / model.h) + ')'
+    if (model.uniform) {
+      // 内容不足一屏：等比缩放，保持真实宽高比、不纵向拉伸；轨道高于缩略图
+      // 时（最低高度钳制）垂直居中，避免空白堆在底部。
+      const s = Math.min(cw / model.w, ch / model.h)
+      const th = model.h * s
+      model.inner.style.transform = 'translate(0px, ' + ((ch - th) / 2) + 'px) scale(' + s + ')'
+    } else {
+      model.inner.style.transform = 'scale(' + (cw / model.w) + ', ' + (ch / model.h) + ')'
+    }
   }
 
   const cloneThumb = (): void => {
@@ -181,7 +199,13 @@ function ConversationMinimap(): React.ReactElement | null {
     inner.style.height = rect.height + 'px'
     inner.appendChild(node)
     container.replaceChildren(inner)
-    thumbModelRef.current = { inner, w: rect.width, h: rect.height }
+    // 与 compute 同口径：内容不足一屏（不产生滚动）时等比缩放，超出一屏时
+    // 拉伸铺满轨道（可用高度同样取 getBoundingClientRect，避免取整差异）。
+    const composer = sp.querySelector('[data-composer-seat]')
+    const composerHeight = composer === null ? 0 : composer.getBoundingClientRect().height
+    const avail = sp.getBoundingClientRect().height - composerHeight - 6
+    const uniform = rect.height <= avail
+    thumbModelRef.current = { inner, w: rect.width, h: rect.height, uniform }
     applyThumbScale()
   }
 
@@ -254,6 +278,7 @@ function ConversationMinimap(): React.ReactElement | null {
       scrollportRef.current = next
       thumbModelRef.current = null
       lastFlowWidthRef.current = 0
+      lastFitsRef.current = false
       setHover(null)
       if (previous !== null) previous.removeEventListener('scroll', onScroll)
       if (next !== null) next.addEventListener('scroll', onScroll, { passive: true })
@@ -287,18 +312,30 @@ function ConversationMinimap(): React.ReactElement | null {
       const composerHeight = composer === null ? 0 : composer.getBoundingClientRect().height
       const sbw = scrollbarWidthOf(scrollport)
       const vw = window.innerWidth
-      // 地图高度随会话内容实时伸缩：内容不足一屏时按内容高度显示（缩略图不纵向
-      // 拉伸），超出一屏时填满可用高度。内容基准与缩略图克隆同源（data-chat-flow）。
+      const avail = rect.height - composerHeight - 6
+      // 地图高度随会话内容实时伸缩（内容基准与缩略图克隆同源 data-chat-flow）：
+      // - 内容不足一屏：缩略图按"宽 / 内容宽"等比缩放后的高度显示，保持真实
+      //   宽高比、不纵向拉伸；色块模式仍按内容高度铺满轨道；
+      // - 超出一屏：填满可用高度（缩略图纵向拉伸铺满轨道）。
       const flow = scrollport.querySelector('[data-chat-flow]')
       const flowRect = flow === null ? null : flow.getBoundingClientRect()
       const flowTopAbs = flowRect === null ? 0 : flowRect.top - rect.top + scrollport.scrollTop
       const contentH = flowRect === null
         ? Math.max(1, total - composerHeight)
         : Math.max(1, flowRect.height)
+      const fits = contentH <= avail
+      const thumbScale = flowRect === null || flowRect.width <= 0
+        ? 0
+        : widthRef.current / flowRect.width
+      const thumbH = Math.min(avail, contentH * thumbScale)
       setBox({
         right: Math.max(0, vw - rect.right + sbw + 2),
         top: rect.top + 2,
-        height: Math.max(80, Math.min(rect.height - composerHeight - 6, contentH)),
+        height: thumbModeRef.current && fits
+          ? Math.max(THUMB_BOX_MIN, thumbH)
+          : Math.max(80, Math.min(avail, contentH)),
+        fits,
+        thumbH,
       })
       const rows = scrollport.querySelectorAll('[data-chat-anchor-key]')
       const list: Bar[] = []
@@ -325,8 +362,10 @@ function ConversationMinimap(): React.ReactElement | null {
       }
       if (thumbModeRef.current) {
         const flowWidth = flowRect === null ? 0 : flowRect.width
-        if (flowWidth !== lastFlowWidthRef.current) {
+        if (flowWidth !== lastFlowWidthRef.current || fits !== lastFitsRef.current) {
+          // 内容宽度或"是否超出一屏"变化时缩放策略变了，强制重克隆。
           lastFlowWidthRef.current = flowWidth
+          lastFitsRef.current = fits
           scheduleThumbClone(true)
         } else {
           scheduleThumbClone(false)
@@ -338,6 +377,7 @@ function ConversationMinimap(): React.ReactElement | null {
     if (mutation !== null) mutation.observe(watchRoot, { childList: true, subtree: true, characterData: true })
     window.addEventListener('resize', schedule)
 
+    computeRef.current = compute
     compute()
 
     return () => {
@@ -371,6 +411,8 @@ function ConversationMinimap(): React.ReactElement | null {
       thumbModelRef.current = null
       thumbQueuedRef.current = false
     }
+    // 缩略图模式下地图高度随宽度等比变化（box 高度依赖 width），重算一次盒。
+    computeRef.current()
   }, [width])
 
   React.useEffect(() => {
@@ -471,10 +513,18 @@ function ConversationMinimap(): React.ReactElement | null {
   }
 
   if (!collapsed && bars.length > 0) {
+    // 缩略图模式下指示条与缩微内容对齐：内容不足一屏时缩略图等比缩小并居中，
+    // 指示条随之收缩、垂直居中覆盖缩略图；其余情况按整条轨道铺满。
+    const thumbAligned = thumbMode && box.fits
+    const span = thumbAligned ? Math.max(1, box.thumbH) : box.height
+    const offset = thumbAligned ? Math.max(0, (box.height - span) / 2) : 0
     mapChildren.push(React.createElement('div', {
       key: 'viewport',
       className: 'dshcm-viewport',
-      style: { top: viewport.top * box.height, height: Math.max(20, viewport.height * box.height) },
+      style: {
+        top: offset + viewport.top * span,
+        height: thumbAligned ? viewport.height * span : Math.max(20, viewport.height * span),
+      },
     }))
   }
 
