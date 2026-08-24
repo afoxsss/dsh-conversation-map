@@ -12,7 +12,7 @@
  */
 import { defineConfig } from 'tsdown'
 
-const PLUGIN_ID = 'dsh-conversation-minimap'
+const PLUGIN_ID = 'dsh-conversation-map'
 
 /** web 壳冻结模块表的基线 specifier（packages/client/web/src/platform.ts）。 */
 const PLATFORM_EXTERNALS = new Set([

@@ -1,5 +1,5 @@
 /**
- * dsh-conversation-minimap — 浏览器半身。
+ * dsh-conversation-map — 浏览器半身。
  *
  * 在对话区右侧渲染一条可拖动调宽的会话代码地图：
  * - 宽度 < 50px：色块模式（按消息类型着色，悬停显示内容预览）；
@@ -459,8 +459,8 @@ export function apply(ctx: PluginContext): void {
   ctx.effect(() => {
     if (typeof document === 'undefined') return
     const tag = document.createElement('style')
-    tag.dataset.plugin = 'dsh-conversation-minimap'
-    tag.dataset.pluginCss = 'dsh-conversation-minimap/minimap.css'
+    tag.dataset.plugin = 'dsh-conversation-map'
+    tag.dataset.pluginCss = 'dsh-conversation-map/minimap.css'
     tag.textContent = MINIMAP_CSS
     document.head.appendChild(tag)
     return () => { tag.remove() }

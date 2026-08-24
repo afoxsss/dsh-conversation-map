@@ -1,4 +1,4 @@
-# dsh-conversation-minimap
+# dsh-conversation-map
 
 > 会话代码地图（Conversation Minimap）—— DeepSeek Harness (`dsh`) Web 客户端插件。
 
@@ -16,7 +16,7 @@
 
 ```sh
 # 固定到某个 commit，避免后续推送悄悄改变安装时执行的代码
-dsh plugin --profile web add github:afoxsss/dsh-conversation-minimap#<commit-sha>
+dsh plugin --profile web add github:afoxsss/dsh-conversation-map#<commit-sha>
 ```
 
 > Git 安装会执行本包的 `prepare` 构建脚本。pnpm ≥ 10 首次会拦截构建并要求放行：按 `dsh` 提示把打印出的包名加入 profile 目录 `pnpm-workspace.yaml` 的 `allowBuilds`，然后重跑上面的命令。
@@ -26,25 +26,25 @@ dsh plugin --profile web add github:afoxsss/dsh-conversation-minimap#<commit-sha
 ### 从 npm
 
 ```sh
-dsh plugin --profile web add dsh-conversation-minimap
+dsh plugin --profile web add dsh-conversation-map
 ```
 
 ### 本地 checkout / tarball
 
 ```sh
-dsh plugin --profile web add ./dsh-conversation-minimap
+dsh plugin --profile web add ./dsh-conversation-map
 # 或
-dsh plugin --profile web add ./dsh-conversation-minimap-0.1.0.tgz
+dsh plugin --profile web add ./dsh-conversation-map-0.1.0.tgz
 ```
 
 验证层已挂载，然后启动：
 
 ```sh
-dsh --profile web --dump-config   # 应出现 "# == dsh-conversation-minimap" 层
+dsh --profile web --dump-config   # 应出现 "# == dsh-conversation-map" 层
 dsh --profile web
 ```
 
-卸载：`dsh plugin --profile web remove dsh-conversation-minimap`
+卸载：`dsh plugin --profile web remove dsh-conversation-map`
 
 ## 兼容性说明
 
