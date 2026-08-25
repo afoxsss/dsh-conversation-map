@@ -26,8 +26,20 @@
 
 ## 安装
 
+安装最新版（默认）：
+
 ```sh
 dsh plugin --profile web add dsh-conversation-map
+```
+
+安装指定版本（`dsh plugin add` 直接透传 pnpm 参数，支持任意 npm 版本写法）：
+
+```sh
+# 固定某个版本
+dsh plugin --profile web add dsh-conversation-map@0.1.6
+
+# 升级到最新版
+dsh plugin --profile web update dsh-conversation-map@latest
 ```
 
 验证层已挂载，然后启动：
