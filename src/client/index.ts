@@ -7,7 +7,8 @@
  * - 点击跳转、按住拖动快速滚动，视口指示条实时跟随；
  * - 缩略图模式悬停放大镜：整行内容等比放大预览（缩放上限 1:1），面板在光标
  *   左侧、随鼠标垂直移动实时跟随；
- * - 左侧把手拖动调宽（10–320px），顶部 » 收起为 4px 细条；
+ * - 左侧把手拖动调宽（10–320px），顶部 » 收起为 4px 细条（收起后顶部常显
+ *   « 标签，点击标签或细条均可展开，避免收起后"找不到"地图）；
  * - 地图高度随会话内容实时伸缩：内容不足一屏时按等比缩微后的高度显示（缩略图
  *   保持真实宽高比、不拉伸，居中于轨道），超出一屏时填满可用高度。
  *
@@ -611,7 +612,23 @@ function ConversationMinimap(): React.ReactElement | null {
 
   const mapChildren: React.ReactNode[] = []
   if (collapsed) {
-    mapChildren.push(React.createElement('div', { key: 'strip', className: 'dshcm-track dshcm-collapsed' }))
+    mapChildren.push(React.createElement('div', {
+      key: 'strip',
+      className: 'dshcm-track dshcm-collapsed',
+      title: '会话地图（已收起，点击展开）',
+      'aria-label': '会话地图（已收起，点击展开）',
+    }))
+    // 收起态常显 « 展开标签：与收起按钮对称，向左溢出细条形成可见入口；
+    // 点击标签或细条本身均可展开（细条展开由 root 的 onPointerDown 处理）。
+    mapChildren.push(React.createElement('button', {
+      key: 'expand',
+      type: 'button',
+      className: 'dshcm-toggle dshcm-toggle-expand',
+      title: '展开会话地图',
+      'aria-label': '展开会话地图',
+      onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => { event.stopPropagation() },
+      onClick: () => { setCollapsed(false) },
+    }, '«'))
   } else if (thumbMode) {
     mapChildren.push(React.createElement('div', { key: 'thumb', ref: thumbRef, className: 'dshcm-thumb' }))
   } else {
@@ -661,6 +678,7 @@ function ConversationMinimap(): React.ReactElement | null {
       type: 'button',
       className: 'dshcm-toggle',
       title: '收起会话地图',
+      'aria-label': '收起会话地图',
       onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => { event.stopPropagation() },
       onClick: () => { setCollapsed(true) },
     }, '»'))
