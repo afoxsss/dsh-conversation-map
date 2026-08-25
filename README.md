@@ -1,5 +1,7 @@
 # 🗺️ dsh-conversation-map
 
+[English](README.en.md) · 中文
+
 > 会话代码地图（Conversation Minimap）—— DeepSeek Harness (`dsh`) Web 客户端插件。
 
 <p align="center">

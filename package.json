@@ -15,6 +15,7 @@
     "lib/client.js",
     "lib/client.js.map",
     "README.md",
+    "README.en.md",
     "LICENSE"
   ],
   "license": "MIT",
