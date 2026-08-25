@@ -1,6 +1,6 @@
 {
   "name": "dsh-conversation-map",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "会话代码地图：对话区右侧可拖动的会话缩略地图，色块/缩略图双模式，悬停预览、点击跳转、拖动快速滚动",
   "type": "module",
   "main": "index.js",
