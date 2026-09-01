@@ -10,6 +10,7 @@ English · [中文](README.md)
   <a href="https://github.com/afoxsss/dsh-conversation-map/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-3fa46a?style=flat-square"></a>
   <a href="https://github.com/afoxsss/dsh-conversation-map"><img alt="platform" src="https://img.shields.io/badge/platform-Web%20%E2%80%A2%20dsh-blueviolet?style=flat-square"></a>
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek%20Harness-GitHub-181717?style=flat-square&logo=github"></a>
+  <a href="https://awesome-dsh-plugin.com"><img alt="Awesome DSH Plugin" src="https://awesome-dsh-plugin.com/badge.svg"></a>
 </p>
 
 Current version: **0.1.6**
