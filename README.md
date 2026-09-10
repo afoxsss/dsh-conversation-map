@@ -13,7 +13,7 @@
   <a href="https://awesome-dsh-plugin.com"><img alt="Awesome DSH Plugin" src="https://awesome-dsh-plugin.com/badge.svg"></a>
 </p>
 
-当前版本：**0.1.6**
+当前版本：**0.1.7**
 
 在对话区右侧渲染一条可拖动的**会话代码地图**，像编辑器的 minimap 一样预览整段会话并快速滚动：
 
@@ -49,7 +49,7 @@ dsh plugin --profile web add dsh-conversation-map
 
 ```sh
 # 固定某个版本
-dsh plugin --profile web add dsh-conversation-map@0.1.6
+dsh plugin --profile web add dsh-conversation-map@0.1.7
 
 # 升级到最新版
 dsh plugin --profile web update dsh-conversation-map@latest

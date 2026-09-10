@@ -13,7 +13,7 @@ English · [中文](README.md)
   <a href="https://awesome-dsh-plugin.com"><img alt="Awesome DSH Plugin" src="https://awesome-dsh-plugin.com/badge.svg"></a>
 </p>
 
-Current version: **0.1.6**
+Current version: **0.1.7**
 
 Renders a draggable **conversation minimap** on the right side of the chat area — preview the whole conversation like an editor minimap and scroll with a flick:
 
@@ -49,7 +49,7 @@ Install a specific version (`dsh plugin add` forwards to pnpm, so any npm versio
 
 ```sh
 # Pin an exact version
-dsh plugin --profile web add dsh-conversation-map@0.1.6
+dsh plugin --profile web add dsh-conversation-map@0.1.7
 
 # Upgrade to the latest version
 dsh plugin --profile web update dsh-conversation-map@latest
