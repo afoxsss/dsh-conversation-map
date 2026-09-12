@@ -5,7 +5,7 @@
 export const MINIMAP_CSS = `
 .dshcm-root{position:fixed;z-index:1200;pointer-events:auto;user-select:none;-webkit-user-select:none;touch-action:none;-webkit-tap-highlight-color:transparent;}
 .dshcm-track{position:absolute;top:0;right:0;bottom:0;left:0;border-radius:8px;overflow:hidden;cursor:grab;background:rgba(127,136,150,.10);background:color-mix(in srgb,var(--dsw-alias-bg-layer-2,#7f8896) 16%,transparent);border:1px solid rgba(127,136,150,.14);border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1,#7f8896) 60%,transparent);}
-.dshcm-root.dshcm-dragging .dshcm-track{cursor:grabbing;}
+.dshcm-root.dshcm-dragging .dshcm-track,.dshcm-root.dshcm-dragging .dshcm-thumb{cursor:grabbing;}
 .dshcm-track.dshcm-collapsed{border-radius:2px;cursor:pointer;border-color:transparent;background:color-mix(in srgb,var(--dsw-alias-bg-layer-2,#7f8896) 24%,transparent);border-left:1px solid color-mix(in srgb,var(--dsw-alias-border-l1,#7f8896) 45%,transparent);}
 .dshcm-bar{position:absolute;left:1px;right:1px;border-radius:2px;opacity:.72;pointer-events:none;}
 .dshcm-bar.dshcm-hovered{opacity:1;}
@@ -15,7 +15,8 @@ export const MINIMAP_CSS = `
 .dshcm-kind-turn-error{background:var(--dsw-alias-state-error-primary,#d9534f);}
 .dshcm-kind-command,.dshcm-kind-command-input{background:var(--dsw-alias-state-success-primary,#3fa46a);}
 .dshcm-kind-compaction,.dshcm-kind-context,.dshcm-kind-manual-compaction,.dshcm-kind-steering,.dshcm-kind-model-retry,.dshcm-kind-turn-tail,.dshcm-kind-turn-max-tokens,.dshcm-kind-unknown,.dshcm-kind-workflow-run{background:var(--dsw-alias-label-primary,#aeb4bf);opacity:.4;}
-.dshcm-viewport{position:absolute;left:0;right:0;border-radius:7px;pointer-events:none;border:1px solid rgba(140,150,168,.45);border:1px solid color-mix(in srgb,var(--dsw-alias-label-secondary,#8a92a0) 50%,transparent);background:rgba(140,150,168,.10);background:color-mix(in srgb,var(--dsw-alias-label-primary,#aeb4bf) 12%,transparent);}
+.dshcm-viewport{position:absolute;left:0;right:0;border-radius:7px;pointer-events:none;cursor:grab;border:1px solid rgba(140,150,168,.45);border:1px solid color-mix(in srgb,var(--dsw-alias-label-secondary,#8a92a0) 50%,transparent);background:rgba(140,150,168,.10);background:color-mix(in srgb,var(--dsw-alias-label-primary,#aeb4bf) 12%,transparent);}
+.dshcm-root.dshcm-dragging .dshcm-viewport-thumb{cursor:grabbing;}
 .dshcm-thumb{position:absolute;top:0;right:0;bottom:0;left:0;overflow:hidden;border-radius:8px;background:var(--dsw-alias-bg-base,#101319);border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1,#7f8896) 60%,transparent);}
 .dshcm-thumb,.dshcm-thumb *{pointer-events:none !important;user-select:none !important;}
 .dshcm-thumb-inner{transform-origin:top left;overflow:hidden;}
