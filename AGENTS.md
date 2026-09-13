@@ -33,6 +33,7 @@
 ```
 index.js              Host 半身：空 apply，纯占位
 src/client/index.ts   浏览器半身：全部实现（组件、测量、交互、槽位注册）
+src/client/geometry.ts 缩略图几何：纯函数（宽度定标、内容框矩形、垂直平移），无 DOM 依赖
 src/client/style.ts   MINIMAP_CSS：构建时内联为字符串，运行时经 ctx.effect 注入
 cordis.patch.yml      组合包层：按包名插入一行 conversation-minimap
 tsdown.config.ts      构建配置：CJS + __ModuleLoader__ 包装、平台 external 白名单
@@ -41,6 +42,9 @@ package.json          版本、dsh.bundle / dsh.client / exports 契约
 README.md            中文用户文档（与 README.en.md 成对，两语言同权）
 ```
 
+新增 `src/` 下的模块会被内联进 `lib/client.js`（`files` 白名单不必改）；只有新增
+需要浏览器侧解析的外部 specifier 才动 `package.json` 的 `dsh.client.external`。
+
 ## DOM 契约（唯一允许的宿主耦合面）
 
 选择器一律来自 dsh 0.1.x 的 Web 会话列，改代码前先在那个 checkout 里核对：
@@ -48,7 +52,7 @@ README.md            中文用户文档（与 README.en.md 成对，两语言同
 - `[data-conversation-scroll]` — 会话滚动容器。**切换会话时框架会整体重建会话列**，该节点每次都是新的：不要长期持有引用，每次计算重新解析；观察器挂在稳定祖先 `[data-slot="conversation"]`（缺失时退回 `document.body`），滚动监听在节点变化时重绑。
 - `[data-chat-flow]` — 会话内容流容器，缩略图克隆与内容高度基准的唯一来源。
 - `[data-chat-anchor-key]` / `[data-chat-flow-kind]` — 每条会话节点行及其类型（`KIND_LABELS` 已覆盖的类型必须继续可读，出现新 kind 时按 `unknown` 兜底而不是崩）。
-- `[data-composer-seat]` — 底部输入区，地图要避开它。
+- `[data-composer-seat]` — 底部输入区，地图要避开它；它同时是**可见内容的下界**（平台 `ui-chat` 的 `pagingAnchor` 同样取它的顶边当可见下界）：内容框高度按「滚动容器可视高 − 输入区高」算，被输入区盖住的那一段不算"屏幕上正在显示"。
 - 槽位：只注册 `shell.overlay`（`kind: 'list'`, `scope: 'root'`），通过 `ctx.slots.inject` 等待槽位声明；`slots` 是硬依赖，写在客户端 `inject` 里。
 
 ## 运行时状态与样式边界
@@ -56,8 +60,9 @@ README.md            中文用户文档（与 README.en.md 成对，两语言同
 - `localStorage` 键固定在 `dsh-conversation-map:width` / `dsh-conversation-map:collapsed`；读写都要包 `try/catch`（隐私模式下存储不可用必须退回默认值，不能抛）。
 - 样式必须以 `<style data-plugin="dsh-conversation-map" data-plugin-css="dsh-conversation-map/minimap.css">` 形式经 `ctx.effect` 注入并在清理函数里移除——`data-plugin-css` 是宿主热重载清理样式标签的依据，不能省。
 - 只用主题语义令牌 `var(--dsw-alias-*)`，并保留不支持的浏览器上的兜底声明（`style.ts` 现有写法：先写 `rgba(...)` 再写 `color-mix(...)`）。
-- 鼠标/指针交互统一走 pointer events + `setPointerCapture`；拖动、调宽、放大镜的 ref 状态与 React state 同步规则照现有实现，不要在渲染路径里读未同步的 state。
-- 已知性能约束：流式输出期间不得无节流地克隆/测量 DOM（现状 `THUMB_CLONE_INTERVAL = 200ms` + rAF 合并 + pending 去重）；改动量测逻辑时保持这个节流契约，否则长会话会掉帧。
+- 鼠标/指针交互统一走 pointer events + `setPointerCapture`；拖动、调宽、放大镜的 ref 状态与 React state 同步规则照现有实现，**渲染路径里既不读未同步的 state，也不读布局**（量测值一律由 `compute()` 存进 ref 后再在渲染/指针路径读，如 `flowWidthRef`、`visibleTopPxRef`）；指针事件给的是视口坐标、几何算的是轨道坐标，换算必须显式做（`root.getBoundingClientRect().top`）。
+- 已知性能约束：流式输出期间不得无节流地克隆/测量 DOM（现状 `THUMB_CLONE_INTERVAL = 200ms` + rAF 合并 + pending 去重）；改动量测逻辑时保持这个节流契约，否则长会话会掉帧。被节流的是**克隆与量测**；缩略图的仿射变换（`applyThumbScale`，只写 `transform`）必须**每帧**跟随滚动，否则框（每帧重算）会与框下内容错位。
+- 缩略图模式的内容框与平移是同一件事：几何里平移由框位反推（`ty = 框顶 − 框所框内容坐标 × s`），不变量是「框内所见 === 屏幕所见」（见 `src/client/geometry.ts` 的 `thumbTransformFor`）。不要给 `ty` 或框矩形另加钳制，也不要在渲染路径重复钳制——那正是「缩略图模式开始画内容框」那一版把框与内容错位两屏的成因。
 
 ## 构建与验证
 
@@ -74,6 +79,13 @@ pnpm run typecheck   # tsc -p tsconfig.json --noEmit（tsdown 不做类型检查
 
 ```sh
 node -e "const s=require('fs').readFileSync('lib/client.js','utf8');if(!s.includes('__ModuleLoader__.load'))throw new Error('missing module loader wrapper');if(!/require\(['\"]react['\"]\)/.test(s))throw new Error('react must stay external');console.log('bundle contract ok')"
+```
+
+几何不变量自检（改过 `src/client/geometry.ts` 或量测/框渲染时必须跑；Node ≥ 22.6 原生剥离类型，
+直接 import 源文件、不必先构建。路径经 argv 传入，命令里不出现引号，bash / pwsh 通用）：
+
+```sh
+node --input-type=module -e "const g=await import(process.argv[1]);const S=[[200,700,900,20000,650],[320,567,900,1600,800],[320,105,900,300,800],[320,200,900,300,800],[320,560,900,2400,800],[320,120,900,6000,220],[320,400,200,3000,800],[320,600,900,400,900]];let bad=0,n=0;for(const [W,H,contentW,contentH,visiblePx] of S){const s=g.thumbScaleFor(W,contentW);const scaledH=contentH*s;const span=Math.max(1,contentH-visiblePx);const sliding=scaledH>H;let prev=-1;for(const p of [0,0.1,0.25,0.5,0.75,0.9,1]){const raw=p*span;const t=g.thumbTransformFor(W,H,contentW,contentH,raw,visiblePx,s);n=n+1;if(t===null){bad=bad+1;continue}const vt=Math.min(Math.max(0,raw),t.contentSpan);const back=g.thumbFrameToContentTop(t,t.viewportTop);if(Math.abs(t.ty+vt*t.s-t.viewportTop)>1e-9)bad=bad+1;if(t.frameRange<=0?(back!==null):(Math.abs(back-vt)>1e-9))bad=bad+1;if(t.viewportTop<-1e-9||t.viewportTop+t.viewportH>H+1e-9)bad=bad+1;if(sliding&&(t.ty>1e-9||t.ty<H-scaledH-1e-9))bad=bad+1;if(sliding&&t.viewportTop<prev-1e-9)bad=bad+1;prev=t.viewportTop}}console.log(String(n)+' cases, '+String(bad)+' violations');if(bad>0)throw new Error('geometry invariant broken')" ./src/client/geometry.ts
 ```
 
 ## 开发回路（把改动接进正在跑的 Web GUI）
@@ -99,7 +111,13 @@ cd /data/code/dsh_dev/dsh-conversation-map && pnpm run build
 
 ## 交付纪律
 
-- **双语文档同步**：用户可见行为变化同时更新 `README.md` 与 `README.en.md`（两语言必须说同样的话，不添加、不遗漏）；版本号在 `package.json` 中更新；版本号与 README 里标的当前版本保持一致。
+- **双语文档同步**：用户可见行为变化同时更新 `README.md` 与 `README.en.md`（两语言必须说同样的话，不添加、不遗漏）。
+- **版本号跟分支走（`main` 除外）**：非 `main` 分支上的版本号必须等于**当前分支名**去 `v` 后的值（分支 `v0.1.8` → `0.1.8`），**不随提交递增**——只有新建 `vX.Y.Z` 分支时才变。以下四处必须完全一致，不得只改其中一处：
+  1. `package.json` 的 `version`；
+  2. `README.md` 的「当前版本」与 `README.en.md` 的 `Current version`；
+  3. 两份 README 安装章节里固定版本号的示例（`dsh plugin --profile web add dsh-conversation-map@X.Y.Z`）；
+  4. **本分支上每次提交信息末尾的版本号**（如 `…，v0.1.8`）。
+  校验方式：`git branch --show-current` 与 `package.json` 对照。若发现本分支已有提交标了别的版本号，就地改齐——提交尚未推送时用 `git rebase -i` 的 `reword` 改写（不要留下同一个分支上两个版本号）；已合并进 `main` 的历史提交与其版本号一律不回溯修改。`main` 是各版本分支的汇合分支、名字里没有版本号，故不受此约束；它上面的版本号取最后一次合并进来的版本即可，不要求等于任何分支名。
 - **提交信息沿用仓库风格**：`feat:` / `fix:` / `docs:` + 中文摘要，行为变化带版本号（如 `fix: 缩略图恒等比缩放…，v0.1.6`）。一次提交只做一件事，不夹带无关格式化。
 - **同一事实只有一处真源**：面向用户写 README，面向 agent 写本文件；同一规则要在两处出现时，必须同时改。
 - **完成定义**：行为改动用 `pnpm run build` + 类型检查 + 上面的产物自检；涉及交互的改动用上面的 dev 回路在浏览器里实际点一遍（拖动、调宽、点击跳转、悬停放大、收起展开、切换会话）；最后 `git status --short` 确认只改了预期文件，没有把 `lib/`、`.idea/`、临时文件带进来。

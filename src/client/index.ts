@@ -9,20 +9,30 @@
  *   左侧、随鼠标垂直移动实时跟随；
  * - 左侧把手拖动调宽（10–320px），顶部 » 收起为 4px 细条（收起后顶部常显
  *   « 标签，点击标签或细条均可展开，避免收起后"找不到"地图）；
- * - 地图高度随会话内容实时伸缩：缩略图模式恒按等比缩微后的高度显示（保持真实
- *   宽高比、不拉伸），高度随内容连续增长至封顶可用高度；内容超过轨道后缩微图
- *   随滚动垂直平移（minimap 语义），可见区始终落在轨道内。
+ * - 地图高度随会话内容实时伸缩：缩略图缩放恒由「地图宽 / 内容宽」决定，与会话
+ *   长度无关（超长会话不会被压细）；高度随内容连续增长至封顶可用高度，内容超过
+ *   轨道后缩微图随滚动垂直平移（minimap 语义），可见区始终落在轨道内；
+ * - 缩略图模式的"当前会话内容框"恒框住**屏幕上可见的那段内容**：框位按滚动进度铺满
+ *   行程，缩略图的平移由框位反推（见 ./geometry），因此框内所见即屏幕所见，框顶拖动
+ *   1:1 跟手；框高只算输入区之上真正可见的部分。
  *
  * 依赖的 DOM 契约（dsh web 会话列）：
  * - [data-conversation-scroll]  会话滚动容器。注意：每次切换会话时，框架会把
  *   session-maybe 的会话列整体重建，该容器是全新的 DOM 节点——插件不长期持有
  *   旧节点，而是在每次计算时重新解析并重绑观察器（见挂载 effect）。
  * - [data-chat-anchor-key]      每条会话节点行（data-chat-flow-kind 为类型）
- * - [data-composer-seat]        底部输入区（地图避开它）
+ * - [data-composer-seat]        底部输入区（地图避开它；同时是"可见内容"的下界——
+ *   平台 ui-chat 的 pagingAnchor 同样取它的顶边当可见下界）
  * - [data-slot="conversation"]  会话列的稳定槽位锚点（MutationObserver 挂载点，
  *   锚点缺失时退回 document.body）
  */
 import * as React from 'react'
+import {
+  thumbFrameToContentTop,
+  thumbScaleFor,
+  thumbTransformFor,
+  type ThumbTransform,
+} from './geometry'
 import { MINIMAP_CSS } from './style'
 
 /** 槽位服务（与 @deepseek-ai/dsh-client-ui-slots 注册面一致的最小结构）。 */
@@ -52,8 +62,6 @@ interface Box {
   right: number
   top: number
   height: number
-  /** 缩略图按"地图宽 / 内容宽"等比缩微后的内容高度（封顶可用高度）。 */
-  thumbH: number
 }
 
 interface ThumbModel {
@@ -92,8 +100,6 @@ const KIND_LABELS: Record<string, string> = {
 const MAX_SNIPPET = 220
 /** 宽度达到该值时从色块模式切换为缩略图模式。 */
 const THUMB_MIN_WIDTH = 50
-/** 缩略图模式下内容不足一屏时，地图轨道的最低高度（容纳把手与收起按钮）。 */
-const THUMB_BOX_MIN = 48
 const WIDTH_MIN = 10
 const WIDTH_MAX = 320
 /** 缩略图重克隆的最小间隔（流式输出期间约 5 次/秒）。 */
@@ -180,30 +186,57 @@ function ConversationMinimap(): React.ReactElement | null {
   const loupeInnerRef = React.useRef<HTMLDivElement | null>(null)
   const loupeOpenRef = React.useRef(false)
   const loupeScreenRef = React.useRef({ x: 0, y: 0 })
-  /** 当前视口（滚动）比例：缩略图平移与指示条对齐同源；克隆/缩放在 React
-   *  渲染前执行，须经 ref 读取最新值。 */
-  const viewportRef = React.useRef({ top: 0, height: 1 })
+  /** 可见带顶端的内容坐标（**内容像素**，未钳制；内容流上方可能还有内边距时为负）：
+   *  与 bars、悬停提示、缩略图几何同一坐标系；克隆/缩放在 React 渲染前执行，须经 ref
+   *  读取最新值。 */
+  const visibleTopPxRef = React.useRef(0)
+  /** 可见带高度（**内容像素** = 滚动容器可视高 − 底部输入区遮挡的那一段，与平台
+   *  "可见下界 = 输入区顶边"同一处定义）：内容框高度恒等于它 × 倍率。 */
+  const visiblePxRef = React.useRef(1)
+  /** 最近一次量测到的内容流宽度（内容像素）：渲染、量测、指针换算共用同一倍率，
+   *  渲染路径里不再读布局。 */
+  const flowWidthRef = React.useRef(0)
+  /** 当前会话内容高度（与 bars / viewport 同源量测），供点击跳转换算。
+   *  缩略图恒按宽度定标，轨道 y 在长会话下是内容窗口而非整段内容。 */
+  const contentHeightRef = React.useRef(1)
+  /** 内容流起点在**滚动坐标系**里的偏移（= flowRect.top − 容器 top + scrollTop）。
+   *  内容流内坐标 → scrollTop 的换算基准：scrollTop = 内容坐标 − 本值。 */
+  const flowOffsetRef = React.useRef(0)
+  /** 最近一次渲染的轨道高度——点击跳转与缩略图变换的换算基数，须与渲染同源；
+   *  渲染路径外（指针事件）经 ref 读取。 */
+  const boxHeightRef = React.useRef(0)
+  /** "当前会话内容框"元素（缩略图模式下可拖动）。 */
+  const frameRef = React.useRef<HTMLDivElement | null>(null)
+  /** 拖动内容框状态：记录按下点相对框顶的偏移，拖动时保证框跟手不跳。 */
+  const thumbDragRef = React.useRef<{ grabOffset: number } | null>(null)
 
-  /** 缩略图当前的仿射参数（与 applyThumbScale 同源），用于反解悬停坐标。
-   *  恒等比缩放（缩略图永不拉伸）；内容高于轨道时按 minimap 语义随滚动垂直
-   *  平移：可见区在轨道内居中，并钳制于内容边界。 */
-  const thumbTransform = (): { sx: number; sy: number; tx: number; ty: number; scaledH: number } | null => {
+  /** 当前缩略图倍率（克隆/量测/指针事件共用；未克隆时 0）。内容流宽度取最近一次
+   *  量测值（flowWidthRef），渲染路径因此不必读布局，且与量测同源。 */
+  const currentThumbScale = (): number => {
+    const model = thumbModelRef.current
+    const contentW = flowWidthRef.current > 0 ? flowWidthRef.current : (model === null ? 0 : model.w)
+    return thumbScaleFor(widthRef.current, contentW)
+  }
+
+  /** 缩略图当前的仿射参数（与 applyThumbScale 同源），用于反解悬停坐标与内容框位置。
+   *  缩放恒由「容器宽 / 内容宽」决定、与会话长度无关（缩略图永不拉伸，超长会话
+   *  也不会被压细）；内容框恒框住屏幕上可见的那段内容，缩略图的垂直平移由框位反推。
+   *  几何规则见 ./geometry。 */
+  const thumbTransform = (): ThumbTransform | null => {
     const container = thumbRef.current
     const model = thumbModelRef.current
     if (container === null || model === null) return null
-    const cw = container.clientWidth
-    const ch = container.clientHeight
-    if (cw <= 0 || ch <= 0) return null
-    const s = Math.min(cw / model.w, ch / model.h)
-    const scaledH = model.h * s
-    let ty = (ch - scaledH) / 2
-    if (scaledH > ch) {
-      const vp = viewportRef.current
-      const visibleH = Math.max(1, vp.height * scaledH)
-      const ideal = ch / 2 - (vp.top * scaledH + visibleH / 2)
-      ty = Math.min(0, Math.max(ch - scaledH, ideal))
-    }
-    return { sx: s, sy: s, tx: 0, ty, scaledH }
+    const s = currentThumbScale()
+    if (s <= 0) return null
+    return thumbTransformFor(
+      container.clientWidth,
+      container.clientHeight,
+      model.w,
+      model.h,
+      visibleTopPxRef.current,
+      visiblePxRef.current,
+      s,
+    )
   }
 
   const applyThumbScale = (): void => {
@@ -212,7 +245,7 @@ function ConversationMinimap(): React.ReactElement | null {
     if (container === null || model === null) return
     const t = thumbTransform()
     if (t === null) return
-    model.inner.style.transform = 'translate(0px, ' + t.ty + 'px) scale(' + t.sx + ')'
+    model.inner.style.transform = 'translate(0px, ' + t.ty + 'px) scale(' + t.s + ')'
   }
 
   const closeLoupe = (): void => {
@@ -246,10 +279,14 @@ function ConversationMinimap(): React.ReactElement | null {
     // 不再随光标左右平移；垂直方向仍以光标位置为中心并钳制在内容内。
     const s = Math.min(LOUPE_SCALE, LOUPE_W / model.w)
     const cx = model.w / 2
-    let cy = (clientY - rect.top - t.ty) / t.sy
+    let cy = (clientY - rect.top - t.ty) / t.s
+    // 垂直钳制：以光标内容点为中心，但面板可视范围（LOUPE_H / s 个内容像素）必须
+    // 落在内容内；内容本身比面板还矮（或极端倍率下一行就超出面板）时贴边显示，
+    // 避免把内容外的空白当成内容展示。
     const halfH = LOUPE_H / (2 * s)
-    if (model.h <= halfH * 2) cy = model.h / 2
-    else cy = Math.min(model.h - halfH, Math.max(halfH, cy))
+    const lo = Math.min(halfH, model.h / 2)
+    const hi = Math.max(model.h - halfH, model.h / 2)
+    cy = Math.min(hi, Math.max(lo, cy))
     const vw = window.innerWidth
     const vh = window.innerHeight
     let left = clientX - LOUPE_W - LOUPE_GAP
@@ -394,13 +431,23 @@ function ConversationMinimap(): React.ReactElement | null {
       }
       const total = scrollport.scrollHeight
       const composer = scrollport.querySelector('[data-composer-seat]')
-      const composerHeight = composer === null ? 0 : composer.getBoundingClientRect().height
+      const composerRect = composer === null ? null : composer.getBoundingClientRect()
+      const composerHeight = composerRect === null ? 0 : composerRect.height
       const sbw = scrollbarWidthOf(scrollport)
       const vw = window.innerWidth
       const avail = rect.height - composerHeight - 6
+      // 可见带 = 滚动容器可视区里**没有被底部输入区盖住**的那一段，与平台同一处定义
+      // （ui-chat ChatView.pagingAnchor 取 composer 顶边为可见下界）。内容框的高度就是
+      // 它的缩影，因此框不会把被输入区遮住的内容也算成"屏幕上正在显示"。
+      const clientH = scrollport.clientHeight
+      const visiblePx = Math.max(1, Math.min(
+        clientH,
+        (composerRect === null ? rect.top + clientH : composerRect.top) - rect.top,
+      ))
       // 地图高度随会话内容实时伸缩（内容基准与缩略图克隆同源 data-chat-flow）：
-      // - 缩略图模式：恒为等比缩微高度（封顶可用高度），随内容连续增长无跳变；
-      //   缩略图本身始终等比，超长内容在轨道内随滚动平移；
+      // - 缩略图模式：恒为「内容高 × 宽度定标倍率」，封顶可用高度。轨道必须容得下
+      //   "可见窗口"的缩影（窗口渲染高 = 窗口内容高 × 倍率），否则轨道比一屏还小、
+      //   点击与所见对不上；封顶后超长内容在轨道内随滚动平移，倍率恒定不随长度变化；
       // - 色块模式：仍按内容高度铺满轨道（封顶可用高度）。
       const flow = scrollport.querySelector('[data-chat-flow]')
       const flowRect = flow === null ? null : flow.getBoundingClientRect()
@@ -408,17 +455,15 @@ function ConversationMinimap(): React.ReactElement | null {
       const contentH = flowRect === null
         ? Math.max(1, total - composerHeight)
         : Math.max(1, flowRect.height)
-      const thumbScale = flowRect === null || flowRect.width <= 0
-        ? 0
-        : widthRef.current / flowRect.width
-      const thumbH = Math.min(avail, contentH * thumbScale)
+      const thumbScale = thumbScaleFor(widthRef.current, flowRect === null ? 0 : flowRect.width)
+      const trackH = Math.min(avail, contentH * thumbScale)
+      const handleWidth = Math.max(0, vw - rect.right + sbw + 2)
       setBox({
-        right: Math.max(0, vw - rect.right + sbw + 2),
+        right: handleWidth,
         top: rect.top + 2,
         height: thumbModeRef.current
-          ? Math.max(THUMB_BOX_MIN, thumbH)
+          ? trackH
           : Math.max(80, Math.min(avail, contentH)),
-        thumbH,
       })
       const rows = scrollport.querySelectorAll('[data-chat-anchor-key]')
       const list: Bar[] = []
@@ -435,21 +480,28 @@ function ConversationMinimap(): React.ReactElement | null {
         })
       }
       setBars(list)
-      {
-        const vh = scrollport.clientHeight
-        const vt = scrollport.scrollTop - flowTopAbs
-        const nextViewport = {
-          top: Math.min(1, Math.max(0, vt / contentH)),
-          height: Math.min(1, Math.max(0.05, vh / contentH)),
-        }
-        viewportRef.current = nextViewport
-        setViewport(nextViewport)
-      }
+      // 可见带顶端的内容坐标（未钳制，内容流上方还有内边距时为负；由 ./geometry 收敛）。
+      const vt = scrollport.scrollTop - flowTopAbs
+      visibleTopPxRef.current = vt
+      visiblePxRef.current = visiblePx
+      // 色块模式的轨道 = 整段内容，指示条按**内容比例**画（与 bars、悬停提示同一坐标系）；
+      // 缩略图模式的框位/平移由 ./geometry 从上面两个 ref 换算，两者互不解释同一份状态。
+      setViewport({
+        top: Math.min(1, Math.max(0, vt / contentH)),
+        height: Math.min(1, Math.max(0.002, visiblePx / contentH)),
+      })
+      // 指针事件（点击跳转）在渲染路径外读取，须经 ref 拿最新量测值。
+      contentHeightRef.current = contentH
+      flowOffsetRef.current = flowTopAbs
+      flowWidthRef.current = flowRect === null ? 0 : flowRect.width
       if (thumbModeRef.current) {
-        const flowWidth = flowRect === null ? 0 : flowRect.width
-        if (flowWidth !== lastFlowWidthRef.current) {
+        // 仿射变换每帧跟随（只写 transform，不测量也不克隆），克隆仍受
+        // THUMB_CLONE_INTERVAL 节流：否则滚动时缩略图最长 200ms 才挪一次，而框每帧
+        // 都按最新滚动量重算，框就会与框下的内容错位。
+        applyThumbScale()
+        if (flowWidthRef.current !== lastFlowWidthRef.current) {
           // 内容宽度变化时缩放基数变了，强制重克隆。
-          lastFlowWidthRef.current = flowWidth
+          lastFlowWidthRef.current = flowWidthRef.current
           scheduleThumbClone(true)
         } else {
           scheduleThumbClone(false)
@@ -525,16 +577,47 @@ function ConversationMinimap(): React.ReactElement | null {
     if (refreshed !== null) setLoupe(refreshed)
   }, [loupeOpen])
 
+  /** 统一的滚动落点写入（含边界钳制）：点击跳转与拖动内容框共用。 */
+  const scrollSessionTo = (scrollTop: number): void => {
+    const sp = scrollportRef.current
+    if (sp === null) return
+    const max = sp.scrollHeight - sp.clientHeight
+    sp.scrollTop = Math.min(max, Math.max(0, scrollTop))
+  }
+
   const scrollToFraction = (clientY: number): void => {
     const sp = scrollportRef.current
     const root = rootRef.current
     if (sp === null || root === null) return
     const rect = root.getBoundingClientRect()
     if (rect.height <= 0) return
+    if (sp.scrollHeight - sp.clientHeight <= 0) return
     let fraction = (clientY - rect.top) / rect.height
     fraction = Math.min(1, Math.max(0, fraction))
-    const max = sp.scrollHeight - sp.clientHeight
-    if (max > 0) sp.scrollTop = fraction * max
+    // 点击 = 把该处内容滚到屏幕顶部。轨道里的内容坐标由**本帧实际渲染的仿射参数**
+    // 反解（与缩略图同一处真源），因此任何倍率/轨道高组合都精确对齐，不依赖近似换算。
+    const t = thumbTransform()
+    const target = t === null
+      ? fraction * contentHeightRef.current // 缩略图尚未克隆：退回按内容比例
+      : Math.max(0, (fraction * boxHeightRef.current - t.ty) / t.s)
+    // target 是"内容流内坐标"（与 bars / 可见区同一坐标系）；内容流首行若不在
+    // 容器顶部，还要加上它在滚动坐标系里的偏移 flowOffsetRef 才是 scrollTop。
+    scrollSessionTo(target + flowOffsetRef.current)
+  }
+
+  /** 拖动内容框：把框顶移到光标处（clientY），会话与缩略图随之一同滚动。
+   *  框的新位置经 thumbFrameToContentTop 反解回**内容坐标**——与渲染严格互逆，
+   *  因此框 1:1 跟手、不漂移。 */
+  const scrollThumbTo = (clientY: number): void => {
+    const root = rootRef.current
+    const t = thumbTransform()
+    if (root === null || t === null) return
+    // 事件给的是视口坐标，几何算的是**轨道坐标**：先减去轨道顶，否则框会整体偏移一个轨道顶。
+    const contentTop = thumbFrameToContentTop(t, clientY - root.getBoundingClientRect().top)
+    if (contentTop === null) return
+    // contentTop 是"内容流内坐标"（与 bars / 可见区同一坐标系）；内容流首行若不在
+    // 容器顶部，还要加上它在滚动坐标系里的偏移 flowOffsetRef 才是 scrollTop。
+    scrollSessionTo(flowOffsetRef.current + contentTop)
   }
 
   const onRootPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -544,11 +627,29 @@ function ConversationMinimap(): React.ReactElement | null {
     draggingRef.current = true
     setDragging(true)
     try { event.currentTarget.setPointerCapture(event.pointerId) } catch (_error) { /* pointer gone */ }
+    // 缩略图模式下按在"当前会话内容框"里 = 抓住可见区：不跳转，改为相对拖动，
+    // 否则按下瞬间内容会跳到光标处、框脱离手指。用元素矩形做命中判定（frame 与
+    // thumb 同为子元素，几何判定比 event.target 稳）。框没有行程（框铺满轨道、
+    // 缩略图无处可挪）时不算抓住，落回点击跳转，免得拖了半天不动。
+    thumbDragRef.current = null
+    const frame = frameRef.current
+    if (thumbModeRef.current && frame !== null && (thumbTransform()?.frameRange ?? 0) > 0) {
+      const fr = frame.getBoundingClientRect()
+      if (event.clientY >= fr.top && event.clientY <= fr.bottom) {
+        thumbDragRef.current = { grabOffset: event.clientY - fr.top }
+        return
+      }
+    }
     scrollToFraction(event.clientY)
   }
 
   const onRootPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
-    if (draggingRef.current) { scrollToFraction(event.clientY); return }
+    if (draggingRef.current) {
+      const thumbDrag = thumbDragRef.current
+      if (thumbDrag !== null) scrollThumbTo(event.clientY - thumbDrag.grabOffset)
+      else scrollToFraction(event.clientY)
+      return
+    }
     if (widthRef.current >= THUMB_MIN_WIDTH) {
       if (hover !== null) setHover(null)
       if (collapsed || resizingRef.current || thumbModelRef.current === null) { closeLoupe(); return }
@@ -576,6 +677,7 @@ function ConversationMinimap(): React.ReactElement | null {
 
   const onRootPointerEnd = (): void => {
     draggingRef.current = false
+    thumbDragRef.current = null
     setDragging(false)
   }
 
@@ -605,6 +707,8 @@ function ConversationMinimap(): React.ReactElement | null {
 
   const thumbMode = width >= THUMB_MIN_WIDTH
   if (box === null || box.height <= 0) return null
+  // 指针事件在渲染路径外读取轨道高，与本帧渲染同源（不在渲染路径里读未同步状态）。
+  boxHeightRef.current = box.height
 
   const mapChildren: React.ReactNode[] = []
   if (collapsed) {
@@ -641,31 +745,27 @@ function ConversationMinimap(): React.ReactElement | null {
   }
 
   if (!collapsed && bars.length > 0) {
-    // 指示条对齐缩微内容：缩略图模式用与 applyThumbScale 同源的仿射参数反推
-    // 可见区在轨道内的位置（等比缩微 + 滚动平移）；首次克隆前或色块模式按
-    // 整条轨道铺满。
+    // "当前会话内容框"两种模式都画：
+    // - 缩略图模式：矩形取自本帧渲染的仿射参数（viewportTop / viewportH）；几何里平移
+    //   由框位反推，因此框内所见恒等于屏幕上正在显示的那一段内容，可直接拖动它滚动会话；
+    // - 色块模式：按"可见区 / 内容"比例画（此时轨道即内容，故与比例一致）。
     const t = thumbMode ? thumbTransform() : null
-    if (t !== null) {
-      const indicatorTop = t.ty + viewport.top * t.scaledH
-      const indicatorHeight = Math.max(4, viewport.height * t.scaledH)
-      mapChildren.push(React.createElement('div', {
-        key: 'viewport',
-        className: 'dshcm-viewport',
-        style: {
-          top: Math.max(0, Math.min(indicatorTop, box.height - indicatorHeight)),
-          height: Math.min(indicatorHeight, box.height),
-        },
-      }))
-    } else {
-      mapChildren.push(React.createElement('div', {
-        key: 'viewport',
-        className: 'dshcm-viewport',
-        style: {
-          top: viewport.top * box.height,
-          height: Math.max(20, viewport.height * box.height),
-        },
-      }))
-    }
+    mapChildren.push(React.createElement('div', {
+      key: 'viewport',
+      ref: frameRef,
+      className: 'dshcm-viewport' + (t === null ? '' : ' dshcm-viewport-thumb'),
+      style: t === null
+        ? {
+            top: viewport.top * box.height,
+            height: Math.max(20, viewport.height * box.height),
+          }
+        : {
+            // 落在轨道内已由 ./geometry 保证（viewportTop ∈ [0, 容器高 − 框高]），此处
+            // 不再重复钳制：静默钳制会把几何不变量被改坏这件事藏起来。只保留可见性下限。
+            top: t.viewportTop,
+            height: Math.max(3, t.viewportH),
+          },
+    }))
   }
 
   if (!collapsed) {
